@@ -8,6 +8,10 @@ export const FIELD = '\x1f'
 export const LOG_FORMAT = '%H%x1f%P%x1f%an%x1f%ct%x1f%D%x1f%s'
 export const MAX_COMMITS = 120
 export const MAX_LANES = 10
+// Pane rows around the map itself: the header line, the Client's footer (station info, files, legend) and one spare.
+export const PANE_CHROME_ROWS = 5
+// The tallest inline pane the map asks for; a taller map scrolls with PgUp/PgDn.
+export const MAX_PANE_ROWS = 32
 const SPACING = 3
 const SUBJECT_ROOM = 72
 
@@ -321,4 +325,10 @@ export function ago(seconds: number, now: number): string {
   if (s < 5400) return `${Math.round(s / 60)}m ago`
   if (s < 129600) return `${Math.round(s / 3600)}h ago`
   return `${Math.round(s / 86400)}d ago`
+}
+
+/** The inline pane height a graph wants: every lane in view (layout rows plus the last), plus the header and footer. */
+export function paneRows(graph: Graph): number {
+  const layout = layoutGraph(graph)
+  return Math.min(MAX_PANE_ROWS, Math.max(8, layout.rows + 1 + PANE_CHROME_ROWS))
 }

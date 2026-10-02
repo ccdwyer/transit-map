@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { Graph } from '../types'
-import { layoutGraph, parseLog, parseStatus, rowRuns } from '../hooks/metro'
+import { MAX_PANE_ROWS, PANE_CHROME_ROWS, layoutGraph, paneRows, parseLog, parseStatus, rowRuns } from '../hooks/metro'
 
 const F = '\x1f'
 const line = (sha: string, parents: string, decorations: string, subject: string, time = 1_700_000_000) =>
@@ -54,6 +54,15 @@ describe('parsing', () => {
   test('an edited file lights only its own car, never one that merely ends the same way', () => {
     const cars = parseStatus(' M app.ts\0 M other/src/app.ts\0 M src/app.ts\0', ['/p/src/app.ts'], '/p')
     expect(cars.map(c => c.lit)).toEqual([false, false, true])
+  })
+})
+
+describe('pane height', () => {
+  test('asks for every lane plus the header and footer, so side lines are not clipped to stubs', () => {
+    const g = graphOf()
+    const map = layoutGraph(g)
+    expect(paneRows(g)).toBe(Math.min(MAX_PANE_ROWS, Math.max(8, map.rows + 1 + PANE_CHROME_ROWS)))
+    expect(paneRows(g)).toBeGreaterThanOrEqual(map.rows + 1 + PANE_CHROME_ROWS > MAX_PANE_ROWS ? MAX_PANE_ROWS : map.rows + 1)
   })
 })
 
@@ -135,7 +144,7 @@ const fail = (): { value: Answer } => ({ value: { exitCode: 1, stdout: '', stder
 
 // A fake git that answers what the hooks module asks, and counts history reads.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function host(on: any, counts: { log: number; show: number; status?: number }) {
+function host(on: any, counts: { log: number; show: number; status?: number }, opened: { rows?: number }[] = [], logOf: () => string = () => LOG) {
   on('session.cwd', () => ({ value: '/p' }))
   on('process.run', (_$: unknown, e: { argv: string[] }) => {
     const args = e.argv.slice(1)
@@ -146,7 +155,7 @@ function host(on: any, counts: { log: number; show: number; status?: number }) {
         return ok('f2\n')
       case 'log':
         counts.log += 1
-        return ok(LOG)
+        return ok(logOf())
       case 'symbolic-ref':
         return ok('feature\n')
       case 'rev-list':
@@ -161,7 +170,10 @@ function host(on: any, counts: { log: number; show: number; status?: number }) {
         return fail()
     }
   })
-  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.open', (_$: unknown, e: { rows?: number }) => {
+    opened.push(e)
+    return { value: { isPlaced: true } }
+  })
 }
 
 const PANE = { component: 'Pane' as const, requestId: 'transit-map' }
@@ -207,6 +219,17 @@ test('/metro loads the map, opens the pane and draws the header and the Client',
     expect(await ui.find({ key: 'metro' })).toBeDefined()
     await ui.unmount()
   }
+})
+
+test('/metro opens the pane inline as tall as the map', async ($, on) => {
+  const counts = { log: 0, show: 0 }
+  const asked: { rows?: number }[] = []
+  host(on, counts, asked)
+  on('command.run', () => ({ text: 'engine' }))
+  await $.command.run({ command: 'metro', args: '' } as never)
+  expect(asked.length).toBe(1)
+  expect(typeof asked[0]?.rows).toBe('number')
+  expect(asked[0]?.rows ?? 0).toBeGreaterThan(PANE_CHROME_ROWS)
 })
 
 test('surfaces without a Client get a timetable', async ($, on) => {
@@ -274,5 +297,42 @@ test('selecting a station in the map shows its files', async ($, on) => {
   await ui.key({ key: 'up', in: 'metro' })
   expect(counts.show).toBe(1)
   expect(await ui.find({ type: 'Text', text: /files: src\/app.ts, src\/feature.ts/, in: 'metro' })).toBeDefined()
+  await ui.unmount()
+})
+
+// One line: main only, so the pane asks for very few rows.
+const ONE_LINE = [line('m2', 'm1', 'HEAD -> refs/heads/main', 'Second', 1_700_000_100), line('m1', '', '', 'Base', 1_700_000_000)].join('\n')
+
+test('a map that gains lanes while the pane is open asks for more rows', async ($, on) => {
+  const counts = { log: 0, show: 0 }
+  const asked: { rows?: number }[] = []
+  let log = ONE_LINE
+  host(on, counts, asked, () => log)
+  on('command.run', () => ({ text: 'engine' }))
+  on('tool.call', () => ({ result: { stdout: '', stderr: '' } }))
+  on('ui.panes', () => ({ value: [{ id: 'transit-map', title: 'Transit Map', isShown: true, isFocused: false, isPlaced: true }] }))
+  await $.command.run({ command: 'metro', args: '' } as never)
+  expect(asked.length).toBe(1)
+  const small = asked[0]?.rows ?? 0
+  log = LOG
+  await $.tool.call({ tool: 'Bash', command: 'git fetch --all' })
+  expect(asked.length).toBe(2)
+  expect(asked[1]?.rows ?? 0).toBeGreaterThan(small)
+})
+
+test('inline, the map is laid out to the rows asked for, never past a smaller window', async ($, on) => {
+  const counts = { log: 0, show: 0 }
+  const asked: { rows?: number }[] = []
+  host(on, counts, asked)
+  on('command.run', () => ({ text: 'engine' }))
+  await $.command.run({ command: 'metro', args: '' } as never)
+  const want = asked[0]?.rows ?? 0
+  // The host reports 0 before it has measured the tree: lay out to what was asked.
+  let ui = await $.ui.mount({ plugin: 'transit-map', surface: 'terminal', ...PANE, props: { title: 'Transit Map', bodyColumns: 120, placement: 'inline', scroll: { offset: 0, bodyRows: 0 } } as never })
+  expect((await ui.find({ key: 'metro' }))?.props?.height).toBe(want - 1)
+  await ui.unmount()
+  // A window the person dragged smaller wins.
+  ui = await $.ui.mount({ plugin: 'transit-map', surface: 'terminal', ...PANE, props: { title: 'Transit Map', bodyColumns: 120, placement: 'inline', scroll: { offset: 0, bodyRows: 6 } } as never })
+  expect((await ui.find({ key: 'metro' }))?.props?.height).toBe(5)
   await ui.unmount()
 })

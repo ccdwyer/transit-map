@@ -27,6 +27,8 @@ type View = {
   target: { x: number; y: number } | null
   drag: { x: number; offX: number; moved: boolean } | null
   ready: boolean
+  // The real size the view last followed the train at; 0×0 is the call before layout.
+  followedAt: string
 }
 
 const FRAME_MS = 33
@@ -38,6 +40,7 @@ function fresh(): View {
   return {
     seq: -1,
     layout: null,
+    followedAt: '',
     known: new Set(),
     pops: new Map(),
     offX: 0,
@@ -152,9 +155,12 @@ const TransitMap: ClientModule<MapProps, View> = (props, surface: ClientSurface<
         v.offX += PAN_STEP
         clampX(v, w, carsNow())
       } else if (e.key === 'pageup') {
+        v.follow = false
         v.offY = Math.max(0, v.offY - 2)
       } else if (e.key === 'pagedown') {
-        v.offY = Math.min(Math.max(0, (v.layout?.rows ?? 0) - rowsNow()), v.offY + 2)
+        v.follow = false
+        // The same limit the painter uses: the sharing-label row under the last lane can be paged into view.
+        v.offY = Math.min(Math.max(0, (v.layout?.rows ?? 0) + 1 - rowsNow()), v.offY + 2)
       } else if (e.key === 'home') {
         v.follow = false
         v.offX = 0
@@ -225,12 +231,19 @@ const TransitMap: ClientModule<MapProps, View> = (props, surface: ClientSurface<
     v.target = t === null ? null : { x: t.x, y: t.y }
     if (first && t !== null) v.train = { x: t.x, y: t.y }
     if (v.follow) followHead(v, width, mapRows, graph.cars.length)
+    if (surface.columns > 0 && surface.rows > 0) v.followedAt = `${surface.columns}x${surface.rows}`
     // The same commits stay selected and hovered; ones that left the map are let go.
     const indexOf = (sha: string | null) => (sha === null ? -1 : v.layout?.stations.findIndex(s => s.sha === sha) ?? -1)
     v.sel = indexOf(v.selSha)
     if (v.sel < 0) v.selSha = null
     v.hover = indexOf(v.hoverSha)
     if (v.hover < 0) v.hoverSha = null
+  }
+  // The first call comes before layout (0×0): once a real size arrives, or the pane is resized, follow again.
+  const size = `${surface.columns}x${surface.rows}`
+  if (v.follow && v.layout !== null && surface.columns > 0 && surface.rows > 0 && size !== v.followedAt) {
+    followHead(v, width, mapRows, props.graph?.cars.length ?? 0)
+    v.followedAt = size
   }
   // Record the view once, on the first call: later calls reuse this same state object.
   if (isFirst) surface.setState(v)
@@ -308,7 +321,7 @@ const TransitMap: ClientModule<MapProps, View> = (props, surface: ClientSurface<
       {body}
       <Text wrap="truncate-end" bold={commit !== undefined}>{info}</Text>
       <Text wrap="truncate-end" dimColor>{files === '' ? ' ' : files}</Text>
-      <Box flexDirection="row">
+      <Box flexDirection="row" overflow="hidden">
         {legend.map(lane => (
           <Text key={`l${lane.name}`} color={lane.color}>{`${lane.dashed ? '╍╍' : '━━'} ${lane.name}  `}</Text>
         ))}

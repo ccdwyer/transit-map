@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Detail, Graph } from '../types'
-import { LOG_FORMAT, MAX_COMMITS, parseLog, parseStatus } from './metro'
+import { LOG_FORMAT, MAX_COMMITS, paneRows, parseLog, parseStatus } from './metro'
 
 const PANE = 'transit-map'
 const graphAtom = atom({ plugin: 'transit-map', key: 'graph' } as const, null)
@@ -19,6 +19,11 @@ const EDITS = new Set(['Edit', 'Write', 'NotebookEdit'])
 const MAX_CARS = 60
 
 let seq = 0
+// While the pane is open inline, the body rows it last asked for: a map that gains lanes asks again.
+let askedRows: number | null = null
+// The height of the tree the pane drew last: an inline host reports min(granted, measured), so only a report
+// smaller than what was drawn is a real, smaller window.
+let lastPaneHeight = 0
 
 type Run = { exitCode: number; stdout: string }
 
@@ -94,7 +99,28 @@ async function refresh($: EngineInterface): Promise<Graph | null> {
   }
   await update($, graphAtom, () => graph)
   await update($, errorAtom, () => null)
+  await growPane($, graph)
   return graph
+}
+
+/** The pane is open and the map gained lanes: ask for the rows they need. A closed pane stays closed. */
+async function growPane($: EngineInterface, graph: Graph): Promise<void> {
+  try {
+    const want = paneRows(graph)
+    if (askedRows === null) {
+      // After a reload the module forgot what it asked for; a pane still on screen is still open.
+      const panes = await $.ui.panes()
+      const open = panes.some(p => p.id === PANE && p.isPlaced)
+      if (!open) return
+      askedRows = want
+      return
+    }
+    if (want <= askedRows) return
+    const opened = await $.ui.open({ id: PANE, title: `Transit Map · ${graph.repo}`, rows: want })
+    if (opened.isPlaced) askedRows = want
+  } catch {
+    // The map keeps its size; lower lanes still page into view.
+  }
 }
 
 // Only the train: the working tree changed, history did not.
@@ -164,7 +190,11 @@ export const register: Register = on => {
       return { text: `Transit Map: ${why ?? 'could not read git history.'}` }
     }
     await update($, stripAtom, () => true)
-    await $.ui.open({ id: PANE, title: `Transit Map · ${graph.repo}` })
+    // Inline, ask for every lane at once: left to a third of the screen, side lines clip to stubs.
+    const want = paneRows(graph)
+    askedRows = null
+    const opened = await $.ui.open({ id: PANE, title: `Transit Map · ${graph.repo}`, rows: want })
+    askedRows = opened.isPlaced ? want : null
     const lines = new Set(graph.commits.flatMap(c => [...c.refs, ...c.remotes])).size
     return { text: `Transit Map: ${graph.commits.length} stations on ${lines} line${lines === 1 ? '' : 's'}${graph.truncated ? ' (newest only)' : ''}.` }
   })
@@ -200,6 +230,12 @@ export const register: Register = on => {
     return next(e)
   })
 
+  on('ui.close', { id: PANE }, async ($, e, next) => {
+    askedRows = null
+    lastPaneHeight = 0
+    return next(e)
+  })
+
   on('ui.message', async ($, e, next) => {
     const data = e.data as { select?: unknown } | null
     if (e.element === 'metro' && data !== null && typeof data === 'object' && typeof data.select === 'string') {
@@ -217,7 +253,7 @@ export const register: Register = on => {
       ? ''
       : `${graph.branch ?? 'detached HEAD'}${graph.upstream === null ? '' : ` → ${graph.upstream}`}${graph.ahead > 0 ? ` ↑${graph.ahead}` : ''}${graph.behind > 0 ? ` ↓${graph.behind}` : ''}`
     const header = (
-      <Box key="hdr" flexDirection="row">
+      <Box key="hdr" flexDirection="row" overflow="hidden">
         <Text color="#EE352E" bold>{'Ⓜ TRANSIT MAP '}</Text>
         <Text color="#FFFFFF" bold>{graph?.repo ?? ''}</Text>
         <Text dimColor>{graph === null ? ` ${error ?? 'loading…'}` : `  ${where} · ${graph.cars.length} car${graph.cars.length === 1 ? '' : 's'} on the train`}</Text>
@@ -235,7 +271,16 @@ export const register: Register = on => {
       )
     }
     const { Client } = $.ui.resolve(e)
-    const rows = Math.max(8, (e.props.scroll?.bodyRows ?? e.viewport?.rows ?? 24) - 1)
+    const given = e.props.scroll?.bodyRows ?? 0
+    // Inline, lay out to the height asked for (the host may report the body it measured, not the rows it granted);
+    // a smaller real window (the person dragged the block down) wins. Docked, the body is the real allocation.
+    const asked = askedRows ?? (graph === null ? 9 : paneRows(graph))
+    const body = e.props.placement === 'inline'
+      ? (given > 0 && given < lastPaneHeight ? given : asked)
+      : given > 0 ? given : e.viewport?.rows ?? 24
+    // The header takes one row; the Client gets the rest, never more than the body.
+    const rows = Math.max(1, body - 1)
+    lastPaneHeight = 1 + rows
     return (
       <Box flexDirection="column">
         {header}
