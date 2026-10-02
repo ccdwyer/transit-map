@@ -1,0 +1,16 @@
+{
+  "name": "transit-map",
+  "version": "0.1.0",
+  "description": "Your git history as a Vignelli-style subway map: branches are coloured lines, commits are stations, merges are interchanges, and your working tree is a train on the current line",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "Chris Dwyer",
+    "url": "https://github.com/ccdwyer"
+  },
+  "repository": "https://github.com/ccdwyer/transit-map",
+  "homepage": "https://github.com/ccdwyer/transit-map",
+  "supportUrl": "https://github.com/ccdwyer/transit-map/issues",
+  "documentationUrl": "https://github.com/ccdwyer/transit-map#readme",
+  "privacyPolicyUrl": "https://github.com/ccdwyer/transit-map/blob/main/PRIVACY.md",
+  "license": "MIT"
+}
