@@ -1,5 +1,9 @@
 # Transit Map
 
+![Transit Map demo](media/demo.gif)
+
+*`/metro` draws the repo as a subway map with tags and four lines; after Claude commits, a new station appears and the train runs empty.* [Watch the MP4](https://github.com/ccdwyer/claude-mods/raw/main/media/transit-map.mp4)
+
 A Claude Code mod that draws your git history as a Vignelli-style subway map.
 
 - **Lines are branches.** Each branch is a bold, flat-coloured line. Trunk (`main`, `master`) is always red.
