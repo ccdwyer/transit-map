@@ -1,6 +1,6 @@
 {
   "name": "transit-map",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Your git history as a Vignelli-style subway map: branches are coloured lines, commits are stations, merges are interchanges, and your working tree is a train on the current line",
   "types": "./types/index.d.ts",
   "author": {
